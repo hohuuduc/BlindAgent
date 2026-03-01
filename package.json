@@ -1,0 +1,37 @@
+{
+  "name": "agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "execa": "^5.1.1",
+    "gpt-tokenizer": "^3.4.0",
+    "gray-matter": "^4.0.3",
+    "inquirer": "^9.2.12",
+    "js-yaml": "^4.1.1",
+    "jsonrepair": "^3.13.2",
+    "ts-morph": "^27.0.2",
+    "vectra": "^0.12.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/inquirer": "^9.0.9",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

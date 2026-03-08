@@ -1,34 +1,26 @@
 # BlindAgent: Strategic Reasoning Cache
-**Version:** 1.2 (Project Renamed, Manual Test Scenarios Added)
+**Version:** 1.3 (Semantic Memory Integration & Planner Strictness)
 
 ## 1. System Blueprint
 
 ### App Description & Functions
 **BlindAgent** is a modular, state-machine-driven AI Agent Framework built in Node.js + TypeScript, specifically designed to orchestrate lightweight, local LLMs (e.g., `gpt-oss:20b` via Ollama).
 **Core Features:**
-- **Constrained Planning:** A `PlanAgent` breaks down user requests into sequential tasks, mapped strictly to available skills (prevents hallucinated tool selection).
+- **Constrained Planning:** A `PlanAgent` breaks down user requests into sequential tasks, mapped strictly to available skills, actively avoiding over-decomposition and `null` skill fallbacks.
 - **Skill Execution Engine:** A deterministic state machine (`Engine`) that executes YAML/Markdown-defined `SkillGraphs` (nodes: llm, tool, human_input).
-- **Resilient Memory System:** Four distinct layers: `WorkingMemory` (lifecycle slots: `ephemeral`, `carry-over`, `persistent`), `CheckpointManager` (crash recovery via WAL SQLite), `EpisodicMemory` (error learning), `SemanticMemory` (vector embeddings).
+- **Resilient Memory System:** Four distinct layers: `WorkingMemory` (lifecycle slots), `CheckpointManager` (crash recovery via WAL SQLite), `EpisodicMemory` (error learning), and `SemanticMemory` (vector embeddings via `vectra` for historical context).
+- **Graceful Degradation:** Optional dependencies (like embedding models for Semantic Memory) are health-probed on startup; the system falls back to a stateless mode rather than crashing if unavailable.
 - **Robust Output Handling:** A `json-sanitizer.ts` pipeline to repair and parse messy markdown-wrapped JSON from smaller LLMs.
 - **Safe Execution:** Sandboxed terminal tools with whitelisting, blacklisting, and timeouts.
-- **Full Observability Logging:** Dual-output logger (console + file) with `logBlock()` for large payloads. Captures LLM thinking traces, prompt/response pairs, tool I/O to daily log files (`log/agent-YYYY-MM-DD.log`).
+- **Full Observability Logging:** Dual-output logger (console + file) with `logBlock()` for large payloads. Traces are carefully selected to balance debuggability and log bloating.
 
 ### Source Structure
 - `src/core/`: Foundation (`engine.ts`, `llm-provider.ts`, `json-sanitizer.ts`, `prompt-renderer.ts`, `config.ts`, `types.ts`).
-  - `types.ts` exports `LLMResponse` (content + thinking + raw), `CompletionOptions` (includes `think` parameter for reasoning models).
-  - `llm-provider.ts`: `complete()` returns `Promise<LLMResponse>`. `OllamaProvider` captures `message.thinking` and logs via `logger.block()`.
-- `src/agents/`: High-level orchestration (`plan-agent.ts`, `task-agent.ts`).
-- `src/memory/`: Storage systems (`working.ts`, `checkpoint.ts`, `semantic.ts`, `episodic.ts`, `task-output.ts`).
+- `src/agents/`: High-level orchestration (`plan-agent.ts`, `task-agent.ts`). Injects semantic context into prompts.
+- `src/memory/`: Storage systems (`working.ts`, `checkpoint.ts`, `semantic.ts`, `episodic.ts`, `task-output.ts`). Includes safe wrappers for vector operations.
 - `src/skills/`: Skill loading/validation from Markdown (`loader.ts`, `registry.ts`, `validator.ts`).
 - `src/tools/`: Tool implementations and registry (`registry.ts`, `terminal.ts`, `file-ops.ts`, `syntax-check.ts`, `ast-parser.ts`).
-- `src/utils/`: `logger.ts` (dual console+file, `logBlock` for file-only payloads), `token-counter.ts`.
-- `skills/`: Declarative skill definitions (`*.md` — `code_explorer`, `code_writer`, `code_modifier`, `error_debugger`).
-- `tests/manual/`: Three structured manual QA scenarios ordered by complexity:
-  - `01_easy_code_exploration/`: LLM reads and summarizes `llm-provider.ts`, testing `code_explorer` skill + tool-chain.
-  - `02_medium_feature_addition/`: LLM adds a cache layer to `token-counter.ts`, testing multi-step write + syntax-check pipeline.
-  - `03_hard_system_refactoring/`: LLM adds a new `session` lifecycle to core `types.ts` + `WorkingMemory`, testing cross-file awareness.
-- `tests/integration/`: Automated E2E tests (`ollama-e2e.test.ts`) verifying `structuredOutput`, `PlanAgent`, and `Engine` against a live Ollama instance.
-- `log/`: Runtime log output (gitignored). Daily files: `agent-YYYY-MM-DD.log`.
+- `skills/`: Declarative skill definitions (`*.md`). Rigidly defined boundaries (`code_explorer` for read-only, `code_writer` for creation, `code_modifier` for editing) to map intention precisely.
 
 ## 2. Deep Reasoning Insights
 
@@ -38,34 +30,32 @@
 
 ### Challenge 2: Context Window Overflow (AST Parsing)
 - **Problem:** Feeding entire files to 20B model blows out the token budget.
-- **Solution:** `ast-parser.ts` (`ts-morph`) applies cascading degradation per token budget: Phase 1 (full body) → Phase 2 (block split) → Phase 3 (signature only).
+- **Solution:** `ast-parser.ts` (`ts-morph`) applies cascading degradation: Phase 1 (full body) → Phase 2 (block split) → Phase 3 (signature only).
 
 ### Challenge 3: Crash Recovery & State Persistence
 - **Problem:** Mid-task crashes meant total loss of progress.
 - **Solution:** `CheckpointManager` serializes `WorkingMemory` + current node to SQLite WAL on every node transition. `index.ts` detects incomplete checkpoints on startup and offers resume.
 
-### Challenge 4: Observability Without Console Noise
-- **Problem:** Debugging requires inspecting full LLM prompts and thinking traces — printing all of it overwhelms the user.
-- **Solution:** `logger.ts` dual-output. `log()` → console + file (structured events). `logBlock()` → file only (large payloads: prompts, thinking, tool results). `complete()` returns `LLMResponse` (not `string`) to propagate thinking traces throughout the stack without discarding them at the provider boundary.
+### Challenge 4: Semantic Context Injection without Hard Dependencies
+- **Problem:** We need to pull past task knowledge (via vectors) into the planning and execution phases natively, but we cannot guarantee that the user has pulled the specific local embedding model (e.g. `nomic-embed-text`) or that Ollama is healthy. If it fails, the whole agent shouldn't crash.
+- **Solution:** Developed "Safe Wrappers" for the Vector DB (`safeAdd`, `safeSearch`) in `semantic.ts` and an explicit `llm.embed('health check')` logic in `index.ts`. If the embed model is unavailable, the `SemanticMemory` dependency gracefully degrades to `undefined`, allowing the agent to continue executing functionally without historical context.
 
 ## 3. Decision Logic
 
+- **Rigid Skill Boundaries:** We constrain the planner by explicitly preventing overlap in skill descriptions (e.g., specifying that `code_modifier` is NOT for read-only analysis). This forces the LLM to choose the exactly correct deterministic graph.
+- **Null-Skill Avoidance:** We explicitly instructed the planner to avoid `null` skill fallbacks, forcing it to utilize the defined deterministic engine graphs rather than relying purely on zero-shot LLM reasoning for task execution.
+- **Log Noise vs Observability:** We stopped block-logging extreme volumes (like the parsed structured output or the raw thinking trace in standard flow) by default because it bloated the log files (`agent-YYYY-MM-DD.log`). We traded granular step-by-step trace capture for higher signal-to-noise ratio in operational debugging.
 - **`Zod` over JSON Schema:** Native TypeScript integration; derive types from schemas, catch alignment errors at compile time.
 - **`better-sqlite3` over JSON files:** ACID + WAL mode for crash-safe checkpointing and episodic memory.
-- **Markdown for Skills:** Separates agent logic from code. Non-developers can edit skills without touching TypeScript.
-- **`LLMResponse` over plain `string`:** Preserves thinking trace + raw API data across the call stack; avoids the anti-pattern of discarding metadata at the provider boundary.
-- **`logBlock()` over verbosity flags:** Simplicity. Dual-mode (console for events, file for data) maps cleanly to operational vs. debugging workflows.
-- **Trade-offs Accepted:** Strict Zod parsing + auto-retry adds latency. `appendFileSync` for logging is synchronous but acceptable given LLM call dominates latency.
 
 ## 4. Pattern Recognition & Anti-Patterns
 
 ### Anti-Patterns to Avoid
-1. **Implicit LLM Fallbacks:** Always pipe output through `json-sanitizer` + Zod. Never silently swallow format errors.
-2. **Unbounded Memory Accumulation:** Never dump raw file contents into context. Use `WorkingMemory` lifecycle tags to enforce GC.
-3. **Unsafe Shell Execution:** All terminal commands must go through `tools/terminal.ts` (whitelist + blacklist + timeout).
-4. **Discarding LLM Metadata at Provider Boundary:** `complete()` must return `LLMResponse` — never only `string`.
-5. **Console-Dumping Large Payloads:** Route full prompts/responses to file via `logger.block()`, not `console.log()`.
+1. **Over-decomposition in Planning:** Do not create multiple micro-tasks if one skill node graph can naturally process the workload. Let the deterministic tool sequence handle internal loops.
+2. **Implicit LLM Fallbacks:** Always pipe output through `json-sanitizer` + Zod. Never silently swallow format errors.
+3. **Hard Dependencies on External Models:** Never assume an embedding or specific LLM model is available; fail gracefully or fall back to basic operation.
+4. **Unbounded Memory Accumulation:** Never dump raw file contents into context. Use `WorkingMemory` lifecycle tags to enforce GC.
+5. **Console-Dumping Large Payloads:** Route full prompts/responses to file via `logger.block()`.
 
 ### Evolved Identity
-> *I am the Principal Architect of **BlindAgent** — a state-machine-driven AI Agent Framework engineered for lightweight local LLMs. I hold deep, specialized knowledge of this system: from the lifecycle-managed `WorkingMemory` and WAL-backed `CheckpointManager` to the cascading AST-chunking strategy, JSON sanitization pipeline, and dual-output observability logger. I prioritize rigorous state management, crash resilience, bounded context, and operational debuggability. My decisions always favor architectural clarity, strict type safety, and predictable structured output over raw LLM freedom.*
-
+> *I am the Principal Architect of **BlindAgent** — a state-machine-driven AI Agent Framework engineered for lightweight local LLMs. I hold deep, specialized knowledge of this system: from the lifecycle-managed `WorkingMemory` and WAL-backed `CheckpointManager` to the semantic vector retrieval and graceful capability degradation. I prioritize rigorous state management, strict planner constraints, bounded context, and operational debuggability. My decisions always favor architectural clarity, deterministic safety, and predictable structured output over raw LLM freedom.*

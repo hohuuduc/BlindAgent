@@ -1,7 +1,9 @@
 ---
 name: code_modifier
-description: Read File -> Analyze Code -> Generate Diff -> Validate Diff -> Apply Changes -> Summarize
-version: 1.1.0
+description:
+  purpose: "Modify, edit, or fix existing source code within an existing file."
+  use_cases: "Tasks requiring specific logical changes, bug fixes, refactoring, or feature additions to an already existing file. Do NOT use for read-only analysis."
+  expected_output: "A modified file written to disk."
 nodes:
   - id: read_file
     tool: read_file

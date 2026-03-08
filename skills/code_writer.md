@@ -1,7 +1,9 @@
 ---
 name: code_writer
-description: Analyze Spec -> Draft Code -> Validate Syntax -> [Fix Loop max 3] -> Human Fix -> Write File -> Summarize
-version: 1.1.0
+description:
+  purpose: "Create a brand new code file from scratch based on a specification."
+  use_cases: "Tasks that explicitly require writing completely NEW code that does not exist yet. Do NOT use for modifying existing files or analyzing."
+  expected_output: "A newly created file written to disk."
 nodes:
   - id: analyze_spec
     tool: llm

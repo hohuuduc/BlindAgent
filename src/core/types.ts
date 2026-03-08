@@ -144,7 +144,7 @@ export interface SkillNode {
 
 export interface SkillGraph {
     name: string;
-    description: string;
+    description: string | Record<string, string>;
     version: string;
     nodes: Map<string, SkillNode>;
     promptTemplates: Map<string, string>;
@@ -200,9 +200,15 @@ export interface RetryConfig {
     nodeExecution: number;
 }
 
+export interface SystemPromptsConfig {
+    planAgent?: string;
+    taskAgent?: string;
+}
+
 export interface AppConfig {
     provider: 'ollama' | 'vllm' | 'openai';
     ollama: OllamaConfig;
     budgets: BudgetConfig;
     retries: RetryConfig;
+    systemPrompts: SystemPromptsConfig;
 }

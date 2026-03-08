@@ -39,9 +39,7 @@ export class OllamaProvider implements LLMProvider {
 
     async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<LLMResponse> {
         // Log request messages to file
-        const messagesPreview = messages.map(m => `[${m.role}] ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`).join('\n');
-        logger.block('LLM', 'REQUEST MESSAGES', messagesPreview);
-        logger.block('LLM', 'REQUEST MESSAGES (FULL)', messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+        logger.block('LLM', 'REQUEST MESSAGES', messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
 
         const body: any = {
             model: this.model,
@@ -79,12 +77,10 @@ export class OllamaProvider implements LLMProvider {
         // Log thinking content (if present)
         if (thinking) {
             logger.info('LLM', `Thinking trace received (${thinking.length} chars)`);
-            logger.block('LLM', 'THINKING', thinking);
         }
 
         // Log model response content
         logger.info('LLM', `Response received (${content.length} chars)`);
-        logger.block('LLM', 'MODEL RESPONSE', content);
 
         // Log raw API response metadata
         const meta = {
@@ -106,7 +102,6 @@ export class OllamaProvider implements LLMProvider {
 
         try {
             const parsed = JSON.parse(sanitized);
-            logger.block('LLM', 'STRUCTURED OUTPUT (parsed)', JSON.stringify(parsed, null, 2));
             return schema.parse(parsed);
         } catch (_firstErr) {
             logger.warn('LLM', 'First parse failed, retrying with correction prompt');

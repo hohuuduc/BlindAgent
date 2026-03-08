@@ -52,9 +52,17 @@ export class SkillRegistry {
 
     /** Return all skills with name + description for Plan Agent prompt. */
     listSummaries(): { name: string; description: string }[] {
-        return Array.from(this.skills.values()).map(s => ({
-            name: s.name,
-            description: s.description,
-        }));
+        return Array.from(this.skills.values()).map(s => {
+            let desc = s.description;
+            if (typeof desc === 'object' && desc !== null) {
+                desc = Object.entries(desc)
+                    .map(([k, v]) => `[${k.toUpperCase()}]: ${v}`)
+                    .join(' | ');
+            }
+            return {
+                name: s.name,
+                description: desc as string,
+            };
+        });
     }
 }

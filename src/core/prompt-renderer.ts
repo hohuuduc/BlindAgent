@@ -30,12 +30,16 @@ export function interpolate(template: string, vars: Record<string, any>): string
             const varName = pipeMatch[1].trim();
             const maxLen = parseInt(pipeMatch[2], 10);
             const value = resolveVar(varName, vars);
-            const str = String(value ?? '');
+            const raw = value ?? '';
+            const str = typeof raw === 'object' && raw !== null ? JSON.stringify(raw) : String(raw);
             return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
         }
 
         const value = resolveVar(trimmed, vars);
-        return value !== undefined ? String(value) : `{{${trimmed}}}`;
+        if (value === undefined) return `{{${trimmed}}}`;
+        // Serialize objects to JSON instead of producing [object Object]
+        if (typeof value === 'object' && value !== null) return JSON.stringify(value, null, 2);
+        return String(value);
     });
 }
 

@@ -80,37 +80,75 @@ tools.register(myNewTool);
 ### 2. Adding a New Skill
 Skills are defined declaratively using **Markdown files** located in the `skills/` directory. No TypeScript changes are needed to add a new skill!
 
-A skill file consists of:
-1. **YAML Frontmatter**: Defines the nodes and edges of the state machine.
+A skill file consists of two main parts:
+1. **YAML Frontmatter**: Defines the skill metadata, nodes, and edges of the state machine.
 2. **Markdown Body**: Defines the prompt templates for any `llm` nodes.
 
-Example `skills/calculator_skill.md`:
+#### YAML Structure
+
+The frontmatter configures the skill's identity and execution graph.
+
 ```markdown
 ---
-name: calculator_skill
-description: Parses a user request and calculates the sum.
+name: my_new_skill
+# The description should be a structured object to help the PlanAgent understand when to use it
+description:
+  purpose: "Brief explanation of what the skill does."
+  use_cases: "Specific scenarios where the PlanAgent should select this skill."
+  expected_output: "What the final output of the skill will be."
 version: 1.0.0
 nodes:
-  - id: extract_numbers
+  - id: step_one
     tool: llm
-    prompt_template: extract_prompt
-    output_schema: 
+    prompt_template: step_one_prompt
+    output_schema:           # (Optional) JSON schema for LLM structued output
       type: object
       properties:
-        a: { type: number }
-        b: { type: number }
+        thought: { type: string }
     edges:
-      - target: calculate
+      - target: step_two     # Go to step_two unconditionally
 
-  - id: calculate
-    tool: calculate_sum # Maps to the tool we registered above
-    edges: [] # End of graph
+  - id: step_two
+    tool: my_custom_tool     # Call a TypeScript tool registered in ToolRegistry
+    edges:
+      # Conditional routing based on the result of the tool
+      - target: step_three
+        condition: 'result.success === true'
+      - target: step_one
+        condition: 'result.success === false'
+      
+  - id: step_three
+    tool: human_input        # Ask user for input
+    promptUser: "Please review the changes."
+    display: diff            # View mode (diff, code, error, text)
+    edges: []                # Empty edges array marks the end of the skill
 ---
+```
 
-### extract_prompt
-You are a helpful assistant. Extract the two numbers from the user's input.
-User input: {{state.taskInput}}
-Respond with RAW JSON: { "a": number, "b": number }
+#### Node Properties
+- **`id`**: Unique identifier for the node within the skill.
+- **`tool`**: The mechanism to execute. Built-in tools include `llm`, `human_input`, `read_file`, `write_file`, `search_files`, `syntax_check`, and `run_command`.
+- **`prompt_template`**: Name of the markdown section below containing the prompt (required for `llm` nodes, and can be used to let an LLM auto-generate parameters for other tools).
+- **`edges`**: Defines the next nodes to execute. Contains `target` and an optional JS `condition` (evaluated against `result` and `state`).
+
+#### Markdown Body (Prompt Templates)
+
+The markdown body contains prompts used by the LLM. Each template starts with `### <template_name>`.
+
+You can use Handlebars-style mustache variables to inject context from `WorkingMemory`:
+- `{{taskInput}}`: The original request from the PlanAgent.
+- `{{lastOutput}}`: The raw output from the immediately preceding node.
+- `{{summary}}`: A deterministic execution summary of all past nodes (often used to build accumulated context).
+
+```markdown
+### step_one_prompt
+You are a helpful assistant. Please analyze the user request.
+User task: {{taskInput}}
+
+Previous output (if any):
+{{lastOutput}}
+
+Respond with RAW JSON matching the requested schema.
 ```
 
 ## Testing

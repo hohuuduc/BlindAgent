@@ -12,3 +12,5 @@ budgets:
 retries:
   jsonFormat: 2         # Số lần cho phép retry ép JSON nếu trả ra sai
   nodeExecution: 3      # Số lần chạy lại graph node nếu công cụ tool gặp lỗi
+features:
+  fewExample: false

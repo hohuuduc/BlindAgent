@@ -15,10 +15,21 @@ import { createSyntaxTools } from './tools/syntax-check';
 import { CheckpointManager } from './memory/checkpoint';
 import { TaskOutputManager } from './memory/task-output';
 import { EpisodicMemory } from './memory/episodic';
+import { SemanticMemory } from './memory/semantic';
 import { generatePlan } from './agents/plan-agent';
 import { runTask, TaskAgentDeps } from './agents/task-agent';
 import { Task } from './core/types';
 import { logger, setLogLevel } from './utils/logger';
+
+// ─── ANSI Colors ────────────────────────────────────────────
+
+const Colors = {
+    green: '\x1b[32m',
+    red: '\x1b[31m',
+    yellow: '\x1b[33m',
+    reset: '\x1b[0m',
+    bold: '\x1b[1m',
+} as const;
 
 // ─── ASCII Banner ───────────────────────────────────────────
 
@@ -69,11 +80,29 @@ function displayPlan(tasks: Task[]): void {
 }
 
 function displayTaskResult(task: Task): void {
-    const icon = task.status === 'success' ? '[OK]' : task.status === 'blocked' ? '[BLOCKED]' : '[FAILED]';
-    console.log(`  ${icon} ${task.id}: ${task.title} → ${task.status}`);
+    if (task.status === 'success') {
+        console.log(`  ${Colors.green}[OK]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
+    } else if (task.status === 'failed') {
+        console.log(`  ${Colors.red}[FAILED]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
+    } else if (task.status === 'blocked') {
+        console.log(`  ${Colors.red}[BLOCKED]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
+    } else if (task.status === 'skipped') {
+        console.log(`  ${Colors.yellow}[SKIPPED]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
+    } else {
+        console.log(`  [${task.status.toUpperCase()}] ${task.id}: ${task.title} → ${task.status}`);
+    }
     if (task.output?.summary_text) {
         console.log(`     - ${task.output.summary_text.slice(0, 120)}`);
     }
+}
+
+function displayFinalReport(task: Task): void {
+    const reportText = task.output?.summary_text || 'No report generated.';
+    console.log(`\n${Colors.bold}${Colors.green}════════════════════════════════════════════════════${Colors.reset}`);
+    console.log(`${Colors.bold}${Colors.green}  FINAL REPORT${Colors.reset}`);
+    console.log(`${Colors.bold}${Colors.green}════════════════════════════════════════════════════${Colors.reset}`);
+    console.log(`${Colors.green}${reportText}${Colors.reset}`);
+    console.log(`${Colors.bold}${Colors.green}════════════════════════════════════════════════════${Colors.reset}\n`);
 }
 
 // ─── Main Loop ──────────────────────────────────────────────
@@ -97,6 +126,23 @@ async function main(): Promise<void> {
         process.exit(1);
     }
     logger.info('Main', 'LLM provider connected');
+
+    // Probe embed model availability
+    let semanticMemory: SemanticMemory | undefined;
+    try {
+        await llm.embed('health check');
+        const vectorDir = path.join(process.cwd(), 'data', 'vector_index');
+        semanticMemory = new SemanticMemory(vectorDir, (text) => llm.embed(text));
+        const initOk = await semanticMemory.init();
+        if (!initOk) {
+            semanticMemory = undefined;
+        } else {
+            logger.info('Main', 'Semantic memory initialized (vector index ready)');
+        }
+    } catch (err: any) {
+        logger.warn('Main', `Embed model unavailable, semantic memory disabled: ${err.message}`);
+        semanticMemory = undefined;
+    }
 
     // Initialize Skills
     const skills = new SkillRegistry();
@@ -151,7 +197,7 @@ async function main(): Promise<void> {
         try {
             // Step 1: Generate plan
             console.log('\n[PLANNING]...');
-            const tasks = await generatePlan(trimmed, llm, skills);
+            const tasks = await generatePlan(trimmed, llm, skills, semanticMemory, config);
             displayPlan(tasks);
 
             // Step 2: Confirm plan
@@ -169,6 +215,8 @@ async function main(): Promise<void> {
                 tools,
                 checkpoint,
                 taskOutput,
+                semanticMemory,
+                config,
             };
 
             for (const task of tasks) {
@@ -204,9 +252,19 @@ async function main(): Promise<void> {
             console.log('\n────────────────────────────────────');
             console.log('[RESULTS]');
             for (const task of tasks) {
+                // Skip the final report task from the per-task summary list
+                if (task.title === 'Report final results') continue;
                 displayTaskResult(task);
             }
-            console.log('────────────────────────────────────\n');
+            console.log('────────────────────────────────────');
+
+            // Display final report in green if present
+            const finalReportTask = tasks.find(t => t.title === 'Report final results');
+            if (finalReportTask && finalReportTask.status === 'success') {
+                displayFinalReport(finalReportTask);
+            } else if (finalReportTask && finalReportTask.status === 'failed') {
+                console.log(`\n${Colors.red}[ERROR] Final report generation failed.${Colors.reset}\n`);
+            }
 
         } catch (err: any) {
             logger.error('Main', `Error: ${err.message}`);

@@ -1,6 +1,6 @@
 {
-  "name": "agent",
-  "version": "1.0.0",
+  "name": "blindagent",
+  "version": "1.2.0",
   "description": "",
   "main": "dist/index.js",
   "scripts": {

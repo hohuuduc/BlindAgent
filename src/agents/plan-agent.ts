@@ -102,10 +102,16 @@ export async function generatePlan(
 
     messages.push({ role: 'user', content: userRequest });
 
+    // Log planning request
+    logger.block('PlanAgent', 'PLAN REQUEST — MESSAGES', messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+
     // Get structured output
     const planOutput = await llm.structuredOutput(messages, PlanOutputSchema, {
         temperature: 0.1,
     });
+
+    // Log raw plan output
+    logger.block('PlanAgent', 'PLAN OUTPUT (structured)', JSON.stringify(planOutput, null, 2));
 
     // Convert to Task objects
     const tasks: Task[] = planOutput.tasks.map(t => ({
@@ -119,5 +125,6 @@ export async function generatePlan(
     }));
 
     logger.info('PlanAgent', `Generated ${tasks.length} tasks`);
+    logger.block('PlanAgent', 'FINAL TASKS', tasks.map(t => `${t.id}: ${t.title} [${t.skillId}]`).join('\n'));
     return tasks;
 }

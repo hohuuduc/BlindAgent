@@ -1,11 +1,12 @@
 // src/index.ts
-// CLI entry point for the Multi-Agent Framework.
+// CLI entry point for BlindAgent.
 // Ties together: Config → LLM → Skills → Tools → Memory → Plan Agent → Task Agent.
 
 import * as readline from 'readline';
+import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig } from './core/config';
-import { createLLMProvider, LLMProvider } from './core/llm-provider';
+import { createLLMProvider } from './core/llm-provider';
 import { SkillRegistry } from './skills/registry';
 import { ToolRegistry } from './tools/registry';
 import { createFileTools } from './tools/file-ops';
@@ -22,11 +23,24 @@ import { logger, setLogLevel } from './utils/logger';
 // ─── ASCII Banner ───────────────────────────────────────────
 
 function printBanner(): void {
+    const pkgPath = path.join(__dirname, '../package.json');
+    let version = '1.0';
+    try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        if (pkg.version) version = pkg.version;
+    } catch (e) {
+        // ignore if missing or error
+    }
+
+    const title = `BlindAgent v${version}`;
+    const leftPad = Math.floor((35 - title.length) / 2);
+    const rightPad = 35 - title.length - leftPad;
+
     console.log(`
-╔══════════════════════════════════════════╗
-║     🤖 Multi-Agent Framework v1.0       ║
-║     State Machine · Local LLM           ║
-╚══════════════════════════════════════════╝
+╔═══════════════════════════════════╗
+║${' '.repeat(Math.max(0, leftPad))}${title}${' '.repeat(Math.max(0, rightPad))}║
+║     State Machine · Local LLM     ║
+╚═══════════════════════════════════╝
 `);
 }
 
@@ -44,9 +58,9 @@ function ask(rl: readline.Interface, question: string): Promise<string> {
 }
 
 function displayPlan(tasks: Task[]): void {
-    console.log('\n📋 Generated Plan:\n');
+    console.log('\n[PLAN] Generated Plan:\n');
     for (const task of tasks) {
-        const skill = task.skillId ? `[${task.skillId}]` : '[❌ no skill]';
+        const skill = task.skillId ? `[${task.skillId}]` : '[no skill]';
         const deps = task.dependencies.length > 0 ? ` (after: ${task.dependencies.join(', ')})` : '';
         console.log(`  ${task.id}: ${task.title} ${skill}${deps}`);
         console.log(`         → ${task.input.slice(0, 100)}`);
@@ -55,10 +69,10 @@ function displayPlan(tasks: Task[]): void {
 }
 
 function displayTaskResult(task: Task): void {
-    const icon = task.status === 'success' ? '✅' : task.status === 'blocked' ? '⏸️' : '❌';
+    const icon = task.status === 'success' ? '[OK]' : task.status === 'blocked' ? '[BLOCKED]' : '[FAILED]';
     console.log(`  ${icon} ${task.id}: ${task.title} → ${task.status}`);
     if (task.output?.summary_text) {
-        console.log(`     📝 ${task.output.summary_text.slice(0, 120)}`);
+        console.log(`     - ${task.output.summary_text.slice(0, 120)}`);
     }
 }
 
@@ -78,11 +92,11 @@ async function main(): Promise<void> {
     // Health check
     const healthy = await llm.healthCheck();
     if (!healthy) {
-        console.error('❌ Cannot connect to Ollama. Please ensure it is running.');
+        console.error('[ERROR] Cannot connect to Ollama. Please ensure it is running.');
         console.error(`   Expected at: ${config.ollama.baseUrl}`);
         process.exit(1);
     }
-    logger.info('Main', '✅ LLM provider connected');
+    logger.info('Main', 'LLM provider connected');
 
     // Initialize Skills
     const skills = new SkillRegistry();
@@ -106,7 +120,7 @@ async function main(): Promise<void> {
     // Check for crash recovery
     const incomplete = checkpoint.loadIncomplete();
     if (incomplete) {
-        console.log(`\n⚠️  Found incomplete task from previous session: "${incomplete.taskId}"`);
+        console.log(`\n[WARNING] Found incomplete task from previous session: "${incomplete.taskId}"`);
         console.log(`   Last node: "${incomplete.currentNodeId}"`);
         const rl = createRL();
         const answer = await ask(rl, '   Resume? (y/n): ');
@@ -126,29 +140,29 @@ async function main(): Promise<void> {
     console.log('Type your request (or "exit" to quit):\n');
 
     while (true) {
-        const userInput = await ask(rl, '🧑 > ');
+        const userInput = await ask(rl, 'User > ');
         const trimmed = userInput.trim();
 
         if (!trimmed || trimmed.toLowerCase() === 'exit') {
-            console.log('\n👋 Goodbye!');
+            console.log('\nGoodbye!');
             break;
         }
 
         try {
             // Step 1: Generate plan
-            console.log('\n🧠 Planning...');
+            console.log('\n[PLANNING]...');
             const tasks = await generatePlan(trimmed, llm, skills);
             displayPlan(tasks);
 
             // Step 2: Confirm plan
-            const confirm = await ask(rl, '▶ Execute this plan? (y/n/edit): ');
+            const confirm = await ask(rl, 'Execute this plan? (y/n/edit): ');
             if (confirm.toLowerCase() !== 'y') {
                 console.log('Plan cancelled.\n');
                 continue;
             }
 
             // Step 3: Execute tasks sequentially
-            console.log('\n⚙️  Executing...\n');
+            console.log('\nExecuting...\n');
             const deps: TaskAgentDeps = {
                 llm,
                 skills,
@@ -165,7 +179,7 @@ async function main(): Promise<void> {
 
                 if (!depsMet) {
                     task.status = 'skipped';
-                    console.log(`  ⏭️  ${task.id}: Skipped (dependency not met)`);
+                    console.log(`  [SKIPPED] ${task.id}: Skipped (dependency not met)`);
                     continue;
                 }
 
@@ -188,7 +202,7 @@ async function main(): Promise<void> {
 
             // Summary
             console.log('\n────────────────────────────────────');
-            console.log('📊 Results:');
+            console.log('[RESULTS]');
             for (const task of tasks) {
                 displayTaskResult(task);
             }
@@ -196,7 +210,7 @@ async function main(): Promise<void> {
 
         } catch (err: any) {
             logger.error('Main', `Error: ${err.message}`);
-            console.error(`\n❌ ${err.message}\n`);
+            console.error(`\n[ERROR] ${err.message}\n`);
         }
     }
 

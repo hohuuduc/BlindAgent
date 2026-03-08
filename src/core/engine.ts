@@ -201,8 +201,8 @@ async function executeNode(
             return await executeHumanInputNode(node, memory);
 
         default:
-            // Tool execution
-            return await executeToolNode(node, vars, ctx);
+            // Tool execution (pass skill for prompt template access)
+            return await executeToolNode(node, skill, vars, ctx);
     }
 }
 
@@ -228,16 +228,30 @@ async function executeLLMNode(
     };
 
     const messages = renderPrompt(config, vars);
-    const raw = await ctx.llm.complete(messages, { jsonMode: true, temperature: 0.1 });
+
+    // Log rendered prompt
+    logger.block('Engine', `LLM NODE "${node.id}" — RENDERED PROMPT`, messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+
+    const llmResponse = await ctx.llm.complete(messages, { jsonMode: true, temperature: 0.1 });
+
+    // Log thinking if present
+    if (llmResponse.thinking) {
+        logger.info('Engine', `Node "${node.id}" — thinking trace (${llmResponse.thinking.length} chars)`);
+        logger.block('Engine', `LLM NODE "${node.id}" — THINKING`, llmResponse.thinking);
+    }
 
     // Try to parse as JSON
     try {
         const { sanitizeLLMJson } = require('./json-sanitizer');
-        const sanitized = sanitizeLLMJson(raw);
-        return JSON.parse(sanitized);
+        const sanitized = sanitizeLLMJson(llmResponse.content);
+        const parsed = JSON.parse(sanitized);
+        logger.block('Engine', `LLM NODE "${node.id}" — PARSED RESULT`, JSON.stringify(parsed, null, 2));
+        return parsed;
     } catch {
-        // Return raw string if not parseable
-        return { raw };
+        // Return raw content if not parseable
+        logger.warn('Engine', `Node "${node.id}" — response not parseable as JSON, returning raw`);
+        logger.block('Engine', `LLM NODE "${node.id}" — RAW RESPONSE`, llmResponse.content);
+        return { raw: llmResponse.content };
     }
 }
 
@@ -259,7 +273,7 @@ async function executeHumanInputNode(
         console.log('---\n');
     }
 
-    console.log(`\n⚠️  ${promptText}`);
+    console.log(`\n  ${promptText}`);
 
     const rl = readline.createInterface({
         input: process.stdin,
@@ -281,11 +295,57 @@ async function executeHumanInputNode(
 
 async function executeToolNode(
     node: SkillNode,
+    skill: SkillGraph,
     vars: Record<string, any>,
     ctx: EngineContext,
 ): Promise<any> {
-    const result = await ctx.tools.execute(node.tool, vars);
+    let toolParams = vars;
+
+    // If node has a prompt template, use LLM to generate tool parameters first
+    if (node.promptTemplate) {
+        const templateBody = skill.promptTemplates.get(node.promptTemplate);
+        if (!templateBody) {
+            throw new Error(`Prompt template not found: "${node.promptTemplate}"`);
+        }
+
+        const config: PromptTemplateConfig = {
+            system: 'You are a coding assistant. Respond with RAW JSON only. No markdown, no explanation.',
+            user: templateBody,
+        };
+
+        const messages = renderPrompt(config, vars);
+        logger.block('Engine', `TOOL NODE "${node.id}" — LLM PARAM GENERATION PROMPT`, messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+
+        const llmResponse = await ctx.llm.complete(messages, { jsonMode: true, temperature: 0.1 });
+
+        if (llmResponse.thinking) {
+            logger.block('Engine', `TOOL NODE "${node.id}" — THINKING`, llmResponse.thinking);
+        }
+
+        try {
+            const { sanitizeLLMJson } = require('./json-sanitizer');
+            const sanitized = sanitizeLLMJson(llmResponse.content);
+            toolParams = JSON.parse(sanitized);
+            logger.block('Engine', `TOOL NODE "${node.id}" — LLM GENERATED PARAMS`, JSON.stringify(toolParams, null, 2));
+        } catch {
+            logger.warn('Engine', `Node "${node.id}" — LLM param response not parseable as JSON`);
+            throw new Error(`Failed to parse LLM-generated parameters for tool "${node.tool}"`);
+        }
+    }
+
+    // Log tool input
+    logger.block('Engine', `TOOL NODE "${node.id}" (${node.tool}) — INPUT`, JSON.stringify(toolParams, null, 2));
+
+    const result = await ctx.tools.execute(node.tool, toolParams);
+
+    // Log tool result
+    const resultPreview = result.output !== undefined
+        ? (typeof result.output === 'string' ? result.output.slice(0, 2000) : JSON.stringify(result.output, null, 2).slice(0, 2000))
+        : '(no output)';
+    logger.block('Engine', `TOOL NODE "${node.id}" (${node.tool}) — RESULT (success=${result.success})`, resultPreview);
+
     if (!result.success) {
+        logger.error('Engine', `Tool "${node.tool}" failed: ${result.error}`);
         throw new Error(`Tool "${node.tool}" failed: ${result.error}`);
     }
     return result.output;

@@ -1,16 +1,18 @@
 // src/core/llm-provider.ts
 // LLMProvider abstraction with OllamaProvider implementation.
 // Decouples the engine from any specific LLM backend.
+// Enhanced: captures thinking content and logs all LLM interactions to file.
 
 import { ZodSchema } from 'zod';
-import { ChatMessage, CompletionOptions, OllamaConfig } from './types';
+import { ChatMessage, CompletionOptions, OllamaConfig, LLMResponse } from './types';
 import { sanitizeLLMJson } from './json-sanitizer';
+import { logger } from '../utils/logger';
 
 // ─── Abstract interface ─────────────────────────────────────
 
 export interface LLMProvider {
-    /** Send messages and receive a text response */
-    complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string>;
+    /** Send messages and receive a structured response (content + thinking) */
+    complete(messages: ChatMessage[], options?: CompletionOptions): Promise<LLMResponse>;
 
     /** Send messages and receive structured, validated JSON */
     structuredOutput<T>(messages: ChatMessage[], schema: ZodSchema<T>, options?: CompletionOptions): Promise<T>;
@@ -35,49 +37,92 @@ export class OllamaProvider implements LLMProvider {
         this.embedModel = config.embedModel ?? 'nomic-embed-text';
     }
 
-    async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<string> {
+    async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<LLMResponse> {
+        // Log request messages to file
+        const messagesPreview = messages.map(m => `[${m.role}] ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`).join('\n');
+        logger.block('LLM', 'REQUEST MESSAGES', messagesPreview);
+        logger.block('LLM', 'REQUEST MESSAGES (FULL)', messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+
+        const body: any = {
+            model: this.model,
+            messages,
+            stream: false,
+            options: {
+                temperature: options?.temperature ?? 0.7,
+                num_predict: options?.maxTokens ?? 2048,
+                stop: options?.stop,
+            },
+            ...(options?.jsonMode ? { format: 'json' } : {}),
+        };
+
+        // Enable thinking if requested
+        if (options?.think !== undefined) {
+            body.think = options.think;
+        }
+
         const response = await fetch(`${this.baseUrl}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: this.model,
-                messages,
-                stream: false,
-                options: {
-                    temperature: options?.temperature ?? 0.7,
-                    num_predict: options?.maxTokens ?? 2048,
-                    stop: options?.stop,
-                },
-                ...(options?.jsonMode ? { format: 'json' } : {}),
-            }),
+            body: JSON.stringify(body),
         });
 
         if (!response.ok) {
-            throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+            const errorText = `Ollama API error: ${response.status} ${response.statusText}`;
+            logger.error('LLM', errorText);
+            throw new Error(errorText);
         }
 
         const data = await response.json() as any;
-        return data.message?.content ?? '';
+        const content = data.message?.content ?? '';
+        const thinking = data.message?.thinking ?? null;
+
+        // Log thinking content (if present)
+        if (thinking) {
+            logger.info('LLM', `Thinking trace received (${thinking.length} chars)`);
+            logger.block('LLM', 'THINKING', thinking);
+        }
+
+        // Log model response content
+        logger.info('LLM', `Response received (${content.length} chars)`);
+        logger.block('LLM', 'MODEL RESPONSE', content);
+
+        // Log raw API response metadata
+        const meta = {
+            model: data.model,
+            total_duration: data.total_duration,
+            eval_count: data.eval_count,
+            eval_duration: data.eval_duration,
+            prompt_eval_count: data.prompt_eval_count,
+        };
+        logger.block('LLM', 'RESPONSE METADATA', JSON.stringify(meta, null, 2));
+
+        return { content, thinking, raw: data };
     }
 
     async structuredOutput<T>(messages: ChatMessage[], schema: ZodSchema<T>, options?: CompletionOptions): Promise<T> {
         const mergedOptions = { ...options, jsonMode: true, temperature: 0.1 };
-        const raw = await this.complete(messages, mergedOptions);
-        const sanitized = sanitizeLLMJson(raw);
+        const llmResponse = await this.complete(messages, mergedOptions);
+        const sanitized = sanitizeLLMJson(llmResponse.content);
 
         try {
             const parsed = JSON.parse(sanitized);
+            logger.block('LLM', 'STRUCTURED OUTPUT (parsed)', JSON.stringify(parsed, null, 2));
             return schema.parse(parsed);
         } catch (_firstErr) {
+            logger.warn('LLM', 'First parse failed, retrying with correction prompt');
+            logger.block('LLM', 'PARSE ERROR — RAW CONTENT', llmResponse.content);
+
             // Retry once with explicit correction prompt
-            const retryRaw = await this.complete([
+            const retryResponse = await this.complete([
                 ...messages,
-                { role: 'assistant', content: raw },
+                { role: 'assistant', content: llmResponse.content },
                 { role: 'user', content: 'JSON format error. Return RAW JSON only, NO markdown.' },
             ], { ...mergedOptions, temperature: 0.0 });
 
-            const retrySanitized = sanitizeLLMJson(retryRaw);
-            return schema.parse(JSON.parse(retrySanitized));
+            const retrySanitized = sanitizeLLMJson(retryResponse.content);
+            const retryParsed = JSON.parse(retrySanitized);
+            logger.block('LLM', 'STRUCTURED OUTPUT (retry parsed)', JSON.stringify(retryParsed, null, 2));
+            return schema.parse(retryParsed);
         }
     }
 

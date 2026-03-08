@@ -1,28 +1,39 @@
 ---
 name: code_modifier
-description: Read File -> AST Chunk -> Generate Diff -> Validate Diff -> Apply -> Summarize
-version: 1.0.0
+description: Read File -> Analyze Code -> Generate Diff -> Validate Diff -> Apply Changes -> Summarize
+version: 1.1.0
 nodes:
   - id: read_file
-    tool: file_reader
+    tool: read_file
     prompt_template: read_file_prompt
     output_schema:
       type: object
       properties:
-        content:
-          type: string
-        file_path:
+        path:
           type: string
     edges:
-      - target: chunk_ast
+      - target: analyze_code
 
-  - id: chunk_ast
-    tool: ast_chunker
-    prompt_template: chunk_ast_prompt
+  - id: analyze_code
+    tool: llm
+    prompt_template: analyze_code_prompt
     output_schema:
       type: object
       properties:
         chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              start_line:
+                type: number
+              end_line:
+                type: number
+              code:
+                type: string
+        target_chunks:
           type: array
           items:
             type: string
@@ -37,11 +48,13 @@ nodes:
       properties:
         unified_diff:
           type: string
+        modified_content:
+          type: string
     edges:
       - target: validate_diff
 
   - id: validate_diff
-    tool: diff_validator
+    tool: llm
     prompt_template: validate_diff_prompt
     output_schema:
       type: object
@@ -50,20 +63,24 @@ nodes:
           type: boolean
         reason:
           type: string
+        corrected_content:
+          type: string
     edges:
-      - target: apply_diff
-        condition: 'is_valid'
+      - target: apply_changes
+        condition: 'result.is_valid === true'
       - target: generate_diff
-        condition: '!is_valid'
+        condition: 'result.is_valid === false'
 
-  - id: apply_diff
-    tool: patch_applier
-    prompt_template: apply_diff_prompt
+  - id: apply_changes
+    tool: write_file
+    prompt_template: apply_changes_prompt
     output_schema:
       type: object
       properties:
-        applied:
-          type: boolean
+        path:
+          type: string
+        content:
+          type: string
     edges:
       - target: summarize
 
@@ -81,63 +98,112 @@ nodes:
 ## Prompt Templates
 
 ### read_file_prompt
-Identify the file that needs to be modified and determine its relative path. Return the file path to explicitly instruct the system to read it.
-Return a JSON object containing the `file_path`.
-Example format:
+Given the user task: "{{taskInput}}"
+
+Identify the file that needs to be modified. Return a JSON object with the `path` field.
+Example output:
 ```json
 {
-  "file_path": "./src/utils/math.ts"
+  "path": "./src/utils/math.ts"
 }
 ```
 
-### chunk_ast_prompt
-Given the entire file content, utilize AST-based chunking to split the source code into meaningful semantic blocks, allowing for easier diff creation.
-Return an array of chunks representing functions, interfaces, and classes.
-Example format:
+### analyze_code_prompt
+Analyze the following source file and break it into logical semantic chunks (functions, classes, interfaces, import blocks).
+Identify which chunks need modification based on the task.
+
+File content:
+{{lastOutput}}
+
+User task: "{{taskInput}}"
+
+Return a JSON with:
+- `chunks`: array of objects with `name`, `start_line`, `end_line`, `code`
+- `target_chunks`: array of chunk names that need to be modified
+
+Example output:
 ```json
 {
-  "chunks": ["[CHUNK_1_START]...", "[CHUNK_2_START]..."]
+  "chunks": [
+    {"name": "imports", "start_line": 1, "end_line": 5, "code": "import { z } from 'zod';"},
+    {"name": "add", "start_line": 7, "end_line": 9, "code": "function add(a, b) { return a + b; }"}
+  ],
+  "target_chunks": ["add"]
 }
 ```
 
 ### generate_diff_prompt
-Generate the necessary modifications referencing the task constraints. 
-You MUST provide the changes exclusively in Unified Diff format (`--- a/file` and `+++ b/file` standard diff syntax). No surrounding explanation is allowed.
-Return a valid JSON object with `unified_diff` property.
-Example format:
+Generate the required code modifications based on the analysis.
+
+Previous analysis:
+{{lastOutput}}
+
+User task: "{{taskInput}}"
+
+You MUST provide:
+1. `unified_diff`: The changes in standard Unified Diff format (`--- a/file`, `+++ b/file` with `@@` hunks)
+2. `modified_content`: The complete new file content after applying the diff
+
+Return a JSON object. No explanation outside JSON.
+Example output:
 ```json
 {
-  "unified_diff": "--- a/src/math.ts\n+++ b/src/math.ts\n@@ -1,3 +1,3 @@\n-export function add(a, b) { return a + b; }\n+export function add(a: number, b: number): number { return a + b; }"
+  "unified_diff": "--- a/src/math.ts\n+++ b/src/math.ts\n@@ -1,3 +1,3 @@\n-export function add(a, b) { return a + b; }\n+export function add(a: number, b: number): number { return a + b; }",
+  "modified_content": "export function add(a: number, b: number): number { return a + b; }"
 }
 ```
 
 ### validate_diff_prompt
-Validate whether the generated unified diff string is strictly formatted correctly without corruption and can be safely applied to the original chunks.
-Return a JSON object containing `is_valid` boolean flag and a `reason` if it's invalid.
-Example format:
+Validate the generated diff and modified content for correctness.
+
+Check for:
+1. The diff syntax is properly formatted
+2. The modified content compiles logically (no broken syntax)
+3. The changes address the original task requirements
+
+Generated output to validate:
+{{lastOutput}}
+
+Original task: "{{taskInput}}"
+
+Return a JSON with `is_valid` (boolean), `reason` (string, empty if valid), and `corrected_content` (the fixed content if invalid, empty string if valid).
+Example output:
 ```json
 {
   "is_valid": true,
-  "reason": ""
+  "reason": "",
+  "corrected_content": ""
 }
 ```
 
-### apply_diff_prompt
-Apply the validated unified diff patch sequence back to the original source file safely. Save the outcome to the disk.
-Return a JSON object asserting `applied: true` upon success.
-Example format:
+### apply_changes_prompt
+Apply the validated changes to the file.
+
+Previous step output:
+{{lastOutput}}
+
+Extract the file path and final content. Return a JSON with `path` and `content` for the write_file tool.
+Example output:
 ```json
 {
-  "applied": true
+  "path": "./src/utils/math.ts",
+  "content": "export function add(a: number, b: number): number { return a + b; }"
 }
 ```
 
 ### summarize_prompt
-Provide a brief summary of how the file was modified and what bugs or features were addressed using the diff approach.
-Return a JSON object with the summary text.
-Example format:
+Summarize the code modification process.
+
+Accumulated context:
+{{summary}}
+
+Last output:
+{{lastOutput}}
+
+Return a JSON with a concise `summary` describing: what file was modified, what changes were made, and why.
+Example output:
 ```json
 {
-  "summary": "Updated add function signature with correct TypeScript typings in math.ts via a unified diff block."
+  "summary": "Modified ./src/utils/math.ts: Added TypeScript type annotations to the add function parameters and return type for type safety."
 }
 ```

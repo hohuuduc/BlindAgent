@@ -8,8 +8,8 @@ export default defineConfig({
     test: {
         environment: 'node',
         globals: false,
-        // Increase timeout for I/O-heavy tests (SQLite, file system)
-        testTimeout: 30000,
+        // Increase timeout for I/O-heavy and LLM tests
+        testTimeout: 120000,
         // Inline source-maps for readable stack traces
         reporters: ['verbose'],
     },

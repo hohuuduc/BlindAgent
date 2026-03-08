@@ -9,6 +9,7 @@ dist/
 *.d.ts.map
 
 # logs
+log/
 logs/
 *.log
 npm-debug.log*
@@ -18,10 +19,6 @@ data/
 *.db
 *.db-journal
 *.db-wal
-
-# environment
-.env
-.env.local
 
 # test
 coverage/

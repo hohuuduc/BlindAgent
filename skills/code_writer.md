@@ -1,7 +1,7 @@
 ---
 name: code_writer
 description: Analyze Spec -> Draft Code -> Validate Syntax -> [Fix Loop max 3] -> Human Fix -> Write File -> Summarize
-version: 1.0.0
+version: 1.1.0
 nodes:
   - id: analyze_spec
     tool: llm
@@ -15,6 +15,8 @@ nodes:
           type: array
           items:
             type: string
+        file_path:
+          type: string
     edges:
       - target: draft_code
 
@@ -32,22 +34,20 @@ nodes:
       - target: validate_syntax
 
   - id: validate_syntax
-    tool: ts_morph_validate
+    tool: syntax_check
     prompt_template: validate_syntax_prompt
     output_schema:
       type: object
       properties:
-        is_valid:
-          type: boolean
-        errors:
-          type: array
-          items:
-            type: string
+        code:
+          type: string
+        filename:
+          type: string
     edges:
       - target: fix_syntax
-        condition: '!is_valid'
+        condition: 'result.valid === false'
       - target: write_file
-        condition: 'is_valid'
+        condition: 'result.valid === true'
 
   - id: fix_syntax
     tool: llm
@@ -60,13 +60,15 @@ nodes:
           type: string
     edges:
       - target: validate_syntax
-        condition: 'retries_left > 0'
+        condition: 'state.retryCount < 3'
       - target: human_fix
-        condition: 'retries_left == 0'
+        condition: 'state.retryCount >= 3'
 
   - id: human_fix
     tool: human_input
     prompt_template: human_fix_prompt
+    promptUser: "The system failed to auto-fix syntax errors after 3 attempts. Please provide corrected code or type 'skip' to skip."
+    display: error
     output_schema:
       type: object
       properties:
@@ -76,13 +78,15 @@ nodes:
       - target: write_file
 
   - id: write_file
-    tool: file_writer
+    tool: write_file
     prompt_template: write_file_prompt
     output_schema:
       type: object
       properties:
-        success:
-          type: boolean
+        path:
+          type: string
+        content:
+          type: string
     edges:
       - target: summarize
 
@@ -100,42 +104,69 @@ nodes:
 ## Prompt Templates
 
 ### analyze_spec_prompt
-Analyze the provided user request and generate a structured specification. Detail the core logic required and any assumptions made.
-Output must be a JSON object containing the `spec_analysis` and a list of `requirements`.
-Example Output:
+Analyze the user request and generate a structured development specification.
+
+User request: "{{taskInput}}"
+
+Detail the core logic required, assumptions, and the target file path.
+Return a JSON with `spec_analysis` (description), `requirements` (list), and `file_path` (target output path).
+Example output:
 ```json
 {
-  "spec_analysis": "The user needs a new mathematical utility class supporting basic arithmetic operations.",
-  "requirements": ["addition method", "subtraction method", "error handling for division by zero"]
+  "spec_analysis": "The user needs a mathematical utility class with basic arithmetic operations and error handling.",
+  "requirements": ["addition method", "subtraction method", "division with zero-check", "JSDoc comments"],
+  "file_path": "./src/utils/math.ts"
 }
 ```
 
 ### draft_code_prompt
-Based on the defined requirements, draft the TypeScript code. Ensure clean architecture and proper JSDoc comments.
-Output strictly as a JSON object with `file_path` and `code_content`.
-Example Output:
+Based on the specification below, draft complete, production-quality TypeScript code.
+
+Specification:
+{{lastOutput}}
+
+Requirements:
+- Follow clean architecture principles
+- Add proper JSDoc comments on all exports
+- Include proper TypeScript type annotations
+- Handle edge cases and errors
+
+Return a JSON with `file_path` and `code_content`.
+Example output:
 ```json
 {
   "file_path": "./src/utils/math.ts",
-  "code_content": "export class MathUtils {\n  add(a: number, b: number) { return a + b; }\n}"
+  "code_content": "/**\n * Mathematical utility class.\n */\nexport class MathUtils {\n  /** Add two numbers. */\n  add(a: number, b: number): number { return a + b; }\n}"
 }
 ```
 
 ### validate_syntax_prompt
-Run the `ts_morph_validate` tool to verify the syntax and types of the provided code drafted.
-Return the validation result indicating whether `is_valid` is true and list any `errors`.
-Example Output:
+Extract the drafted code for syntax validation by the syntax_check tool.
+
+Previous output:
+{{lastOutput}}
+
+Return a JSON with `code` (the TypeScript source) and `filename` (the target filename for context).
+Example output:
 ```json
 {
-  "is_valid": false,
-  "errors": ["Type 'string' is not assignable to type 'number'"]
+  "code": "export class MathUtils {\n  add(a: number, b: number): number { return a + b; }\n}",
+  "filename": "math.ts"
 }
 ```
 
 ### fix_syntax_prompt
-The drafted code contains syntax or type errors. Analyze the compiler errors and provide the updated `fixed_code`.
-Return a JSON object containing the newly formatted valid TypeScript code.
-Example Output:
+The drafted code contains syntax or type errors. Fix them.
+
+Syntax check errors:
+{{lastOutput}}
+
+Original code context:
+{{summary}}
+
+Analyze each error message carefully and provide the corrected code.
+Return a JSON with `fixed_code` containing the complete corrected TypeScript source.
+Example output:
 ```json
 {
   "fixed_code": "export class MathUtils {\n  add(a: number, b: number): number { return a + b; }\n}"
@@ -143,9 +174,14 @@ Example Output:
 ```
 
 ### human_fix_prompt
-The system failed to fix the syntax errors automatically after 3 attempts. Please provide a manual fix or approve the code manually.
-Return a JSON object containing `human_approved_code` after manual resolving.
-Example format:
+The system failed to fix the syntax errors automatically after 3 attempts.
+Please review the errors and provide a manual fix, or type 'skip' to proceed with the current code.
+
+Current errors:
+{{lastOutput}}
+
+Return a JSON with `human_approved_code` containing the manually corrected code.
+Example output:
 ```json
 {
   "human_approved_code": "export class MathUtils { ... }"
@@ -153,21 +189,33 @@ Example format:
 ```
 
 ### write_file_prompt
-Write the final validated code to the designated file path on disk. Ensure directories exist.
-Return a JSON object indicating success.
-Example format:
+Write the final validated code to the target file.
+
+Previous step output:
+{{lastOutput}}
+
+Accumulated context:
+{{summary}}
+
+Extract the file path and code content. Return a JSON with `path` and `content` for the write_file tool.
+Example output:
 ```json
 {
-  "success": true
+  "path": "./src/utils/math.ts",
+  "content": "export class MathUtils {\n  add(a: number, b: number): number { return a + b; }\n}"
 }
 ```
 
 ### summarize_prompt
-Summarize the code generation and writing process. Detail what files were created or updated and what functions were implemented.
-Return a final summary in a JSON object.
-Example format:
+Summarize the code generation process.
+
+Process log:
+{{summary}}
+
+Return a JSON with a concise `summary` of: what file was created, what was implemented, and any issues encountered.
+Example output:
 ```json
 {
-  "summary": "Successfully created ./src/utils/math.ts and implemented MathUtils class with basic arithmetic ops."
+  "summary": "Created ./src/utils/math.ts with MathUtils class implementing add, subtract, and divide methods with full TypeScript types and JSDoc."
 }
 ```

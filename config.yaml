@@ -1,0 +1,14 @@
+provider: 'ollama'
+ollama:
+  baseUrl: 'http://localhost:11434'
+  model: 'gpt-oss:20b-cloud'
+  embedModel: 'nomic-embed-text'
+budgets:
+  systemPrompt: 300
+  fewShot: 500
+  taskContext: 1500     # Giới hạn số lượng tokens context truyền vào task
+  semanticQuery: 1000
+  codeChunk: 2000       # Giới hạn context code trích xuất bằng AST Parser
+retries:
+  jsonFormat: 2         # Số lần cho phép retry ép JSON nếu trả ra sai
+  nodeExecution: 3      # Số lần chạy lại graph node nếu công cụ tool gặp lỗi

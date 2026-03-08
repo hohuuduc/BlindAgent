@@ -66,7 +66,8 @@ export function parseSkillMarkdown(content: string): SkillGraph {
  */
 function parsePromptTemplates(body: string): Map<string, string> {
     const templates = new Map<string, string>();
-    const lines = body.split('\n');
+    // Normalize line endings (Windows \r\n -> \n) before splitting
+    const lines = body.replace(/\r\n/g, '\n').split('\n');
 
     let currentName: string | null = null;
     let currentLines: string[] = [];

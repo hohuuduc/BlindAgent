@@ -1,5 +1,5 @@
 // ============================================================
-// Shared Types for Multi-Agent Framework
+// Shared Types for BlindAgent
 // This file contains all core interfaces used across modules.
 // ============================================================
 
@@ -157,11 +157,26 @@ export interface ChatMessage {
     content: string;
 }
 
+/**
+ * Structured response from an LLM call.
+ * Captures the model's thinking process alongside the final content.
+ */
+export interface LLMResponse {
+    /** The final generated content */
+    content: string;
+    /** The model's internal reasoning trace (if thinking was enabled) */
+    thinking: string | null;
+    /** Raw JSON response body from the API */
+    raw: any;
+}
+
 export interface CompletionOptions {
     temperature?: number;
     maxTokens?: number;
     jsonMode?: boolean;
     stop?: string[];
+    /** Enable thinking/reasoning trace. Use true/false or "low"/"medium"/"high" for gpt-oss models. */
+    think?: boolean | 'low' | 'medium' | 'high';
 }
 
 // --- Config ---

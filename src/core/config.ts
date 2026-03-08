@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { AppConfig, OllamaConfig, BudgetConfig, RetryConfig, SystemPromptsConfig } from './types';
+import { getAppRoot, getWorkDir } from './paths';
 
 const DEFAULT_CONFIG: AppConfig = {
     provider: 'ollama',
@@ -54,10 +55,25 @@ OUTPUT FORMAT:
 
 /**
  * Load configuration from a YAML file, merging with defaults.
- * If the file does not exist, returns defaults only.
+ * Search order: explicit path > CWD/config.yaml > appRoot/config.yaml (bundled).
+ * If no file is found, returns defaults only.
  */
 export function loadConfig(configPath?: string): AppConfig {
-    const resolved = configPath ?? path.join(process.cwd(), 'config.yaml');
+    let resolved: string;
+    if (configPath) {
+        resolved = configPath;
+    } else {
+        // Check CWD first (user override), then app root (bundled default)
+        const cwdConfig = path.join(getWorkDir(), 'config.yaml');
+        const appConfig = path.join(getAppRoot(), 'config.yaml');
+        if (fs.existsSync(cwdConfig)) {
+            resolved = cwdConfig;
+        } else if (fs.existsSync(appConfig)) {
+            resolved = appConfig;
+        } else {
+            return { ...DEFAULT_CONFIG };
+        }
+    }
 
     if (!fs.existsSync(resolved)) {
         return { ...DEFAULT_CONFIG };

@@ -6,6 +6,7 @@ import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
 import { loadConfig } from './core/config';
+import { getAppRoot } from './core/paths';
 import { createLLMProvider } from './core/llm-provider';
 import { SkillRegistry } from './skills/registry';
 import { ToolRegistry } from './tools/registry';
@@ -34,7 +35,7 @@ const Colors = {
 // ─── ASCII Banner ───────────────────────────────────────────
 
 function printBanner(): void {
-    const pkgPath = path.join(__dirname, '../package.json');
+    const pkgPath = path.join(getAppRoot(), 'package.json');
     let version = '1.0';
     try {
         const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
 
     // Initialize Skills
     const skills = new SkillRegistry();
-    const skillsDir = path.join(process.cwd(), 'skills');
+    const skillsDir = path.join(getAppRoot(), 'skills');
     skills.loadFromDirectory(skillsDir);
     logger.info('Main', `Loaded skills: ${skills.listNames().join(', ')}`);
 

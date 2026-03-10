@@ -72,6 +72,19 @@ export interface TaskSummary {
     summary_text: string;
 }
 
+// --- Failure Reflection ---
+
+/**
+ * Records a single failed attempt: the raw error and the LLM's reflection.
+ * Stored on the Task so retries have full context of previous failures.
+ */
+export interface FailureRecord {
+    attempt: number;
+    error: string;
+    rootCause: string;
+    alternativeApproach: string;
+}
+
 // --- Episodic Memory (Error patterns) ---
 
 /**
@@ -115,6 +128,8 @@ export interface Task {
     status: TaskStatus;
     retryCount: number;
     output?: TaskSummary;
+    /** History of failed attempts with LLM reflections */
+    failureContext?: FailureRecord[];
 }
 
 // --- Skill Graph ---
@@ -200,6 +215,11 @@ export interface RetryConfig {
     nodeExecution: number;
 }
 
+export interface ReflectionConfig {
+    /** Max number of reflect-and-retry cycles per task (default: 2) */
+    maxAttempts: number;
+}
+
 export interface SystemPromptsConfig {
     planAgent?: string;
     taskAgent?: string;
@@ -210,5 +230,6 @@ export interface AppConfig {
     ollama: OllamaConfig;
     budgets: BudgetConfig;
     retries: RetryConfig;
+    reflections: ReflectionConfig;
     systemPrompts: SystemPromptsConfig;
 }

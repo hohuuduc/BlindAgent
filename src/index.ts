@@ -89,6 +89,8 @@ function displayTaskResult(task: Task): void {
         console.log(`  ${Colors.red}[BLOCKED]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
     } else if (task.status === 'skipped') {
         console.log(`  ${Colors.yellow}[SKIPPED]${Colors.reset} ${task.id}: ${task.title} → ${task.status}`);
+    } else if (task.status === 'retrying') {
+        console.log(`  ${Colors.yellow}[REFLECTING]${Colors.reset} ${task.id}: ${task.title} → analyzing failure...`);
     } else {
         console.log(`  [${task.status.toUpperCase()}] ${task.id}: ${task.title} → ${task.status}`);
     }
@@ -122,9 +124,7 @@ async function main(): Promise<void> {
     // Health check
     const healthy = await llm.healthCheck();
     if (!healthy) {
-        console.error('[ERROR] Cannot connect to Ollama. Please ensure it is running.');
-        console.error(`   Expected at: ${config.ollama.baseUrl}`);
-        process.exit(1);
+        throw new Error(`Cannot connect to Ollama. Please ensure it is running at: ${config.ollama.baseUrl}`);
     }
     logger.info('Main', 'LLM provider connected');
 
@@ -259,6 +259,18 @@ async function main(): Promise<void> {
             }
             console.log('────────────────────────────────────');
 
+            // Display reflection history for any task that needed it
+            const reflectedTasks = tasks.filter(t => t.failureContext && t.failureContext.length > 0);
+            if (reflectedTasks.length > 0) {
+                console.log(`\n${Colors.yellow}[REFLECTION HISTORY]${Colors.reset}`);
+                for (const t of reflectedTasks) {
+                    console.log(`  ${t.id}: ${t.title} (${t.failureContext!.length} reflection(s))`);
+                    for (const rec of t.failureContext!) {
+                        console.log(`    Attempt ${rec.attempt}: ${rec.rootCause.slice(0, 100)}`);
+                    }
+                }
+            }
+
             // Display final report in green if present
             const finalReportTask = tasks.find(t => t.title === 'Report final results');
             if (finalReportTask && finalReportTask.status === 'success') {
@@ -281,5 +293,12 @@ async function main(): Promise<void> {
 
 main().catch(err => {
     console.error('Fatal error:', err);
-    process.exit(1);
+    console.log('\nPress any key to exit...');
+    if (process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+    }
+    process.stdin.resume();
+    process.stdin.once('data', () => {
+        process.exit(1);
+    });
 });

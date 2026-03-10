@@ -5,7 +5,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import { AppConfig, OllamaConfig, BudgetConfig, RetryConfig, SystemPromptsConfig } from './types';
+import { AppConfig, OllamaConfig, BudgetConfig, RetryConfig, ReflectionConfig, SystemPromptsConfig } from './types';
 import { getAppRoot, getWorkDir } from './paths';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -25,6 +25,9 @@ const DEFAULT_CONFIG: AppConfig = {
     retries: {
         jsonFormat: 2,
         nodeExecution: 3,
+    },
+    reflections: {
+        maxAttempts: 2,
     },
     systemPrompts: {
         planAgent: `You are a project planning assistant. Given a user request, break it down into a sequential list of tasks.
@@ -91,6 +94,7 @@ export function loadConfig(configPath?: string): AppConfig {
         ollama: { ...DEFAULT_CONFIG.ollama, ...(parsed.ollama ?? {}) },
         budgets: { ...DEFAULT_CONFIG.budgets, ...(parsed.budgets ?? {}) },
         retries: { ...DEFAULT_CONFIG.retries, ...(parsed.retries ?? {}) },
+        reflections: { ...DEFAULT_CONFIG.reflections, ...(parsed.reflections ?? {}) },
         systemPrompts: { ...DEFAULT_CONFIG.systemPrompts, ...(parsed.systemPrompts ?? {}) },
     };
 }

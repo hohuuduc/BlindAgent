@@ -4,6 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { Spinner } from './spinner';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -79,6 +80,11 @@ export function log(level: LogLevel, context: string, message: string, data?: an
     const prefix = `[${formatTimestamp()}] [${level.toUpperCase().padEnd(5)}] [${context}]`;
     const line = `${prefix} ${message}`;
 
+    const activeSpinner = Spinner.activeSpinner;
+    if (activeSpinner && !activeSpinner.isPaused) {
+        activeSpinner.clear();
+    }
+
     // Console output
     if (level === 'error') {
         console.error(line, data ?? '');
@@ -86,6 +92,10 @@ export function log(level: LogLevel, context: string, message: string, data?: an
         console.warn(line, data ?? '');
     } else {
         console.log(line, data ?? '');
+    }
+
+    if (activeSpinner && !activeSpinner.isPaused) {
+        activeSpinner.render();
     }
 
     // File output
@@ -99,17 +109,24 @@ export function log(level: LogLevel, context: string, message: string, data?: an
  * Write a detailed block of data to the log file only (not console).
  * Used for large payloads like LLM prompts, responses, and tool results.
  */
-export function logBlock(context: string, title: string, content: string): void {
+export function logBlock(context: string, title: string, content?: string): void {
     const timestamp = formatTimestamp();
     const separator = '─'.repeat(60);
-    const block = [
-        `[${timestamp}] [DETAIL] [${context}] ${separator}`,
-        `  ${title}`,
-        `${separator}`,
-        content,
-        `${separator}`,
-        '',
-    ].join('\n');
+    let array = [
+        `[${timestamp}] [DETAIL] [${context}]`,
+        `  ${title}`
+    ];
+    if (content)
+        array = [
+            ...array,
+            `${separator}`,
+            content,
+            '',
+        ]
+    else
+        array = [...array, '',]
+
+    const block = array.join('\n');
 
     appendToFile(block);
 }
@@ -120,5 +137,5 @@ export const logger = {
     warn: (ctx: string, msg: string, data?: any) => log('warn', ctx, msg, data),
     error: (ctx: string, msg: string, data?: any) => log('error', ctx, msg, data),
     /** Write a detailed block to the log file only (not console) */
-    block: (ctx: string, title: string, content: string) => logBlock(ctx, title, content),
+    block: (ctx: string, title: string, content?: string) => logBlock(ctx, title, content),
 };

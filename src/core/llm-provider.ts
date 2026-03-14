@@ -30,11 +30,13 @@ export class OllamaProvider implements LLMProvider {
     private baseUrl: string;
     private model: string;
     private embedModel: string;
+    private timeoutMs?: number;
 
     constructor(config: OllamaConfig) {
         this.baseUrl = config.baseUrl ?? 'http://localhost:11434';
         this.model = config.model;
         this.embedModel = config.embedModel ?? 'nomic-embed-text';
+        this.timeoutMs = config.timeoutMs;
     }
 
     async complete(messages: ChatMessage[], options?: CompletionOptions): Promise<LLMResponse> {
@@ -58,41 +60,56 @@ export class OllamaProvider implements LLMProvider {
             body.think = options.think;
         }
 
-        const response = await fetch(`${this.baseUrl}/api/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
+        const controller = new AbortController();
+        const timeoutId = this.timeoutMs ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
 
-        if (!response.ok) {
-            const errorText = `Ollama API error: ${response.status} ${response.statusText}`;
-            logger.error('LLM', errorText);
-            throw new Error(errorText);
+        try {
+            const response = await fetch(`${this.baseUrl}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal as RequestInit["signal"],
+            });
+
+            if (!response.ok) {
+                const errorText = `Ollama API error: ${response.status} ${response.statusText}`;
+                logger.error('LLM', errorText);
+                throw new Error(errorText);
+            }
+
+            const data = await response.json() as any;
+            const content = data.message?.content ?? '';
+            const thinking = data.message?.thinking ?? null;
+
+            // Log thinking content (if present)
+            if (thinking) {
+                logger.info('LLM', `Thinking trace received (${thinking.length} chars)`);
+            }
+
+            // Log model response content
+            logger.info('LLM', `Response received (${content.length} chars)`);
+
+            // Log raw API response metadata
+            const meta = {
+                model: data.model,
+                total_duration: data.total_duration,
+                eval_count: data.eval_count,
+                eval_duration: data.eval_duration,
+                prompt_eval_count: data.prompt_eval_count,
+            };
+            logger.block('LLM', 'RESPONSE METADATA', JSON.stringify(meta, null, 2));
+
+            return { content, thinking, raw: data };
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                const errorText = `Ollama API timeout after ${this.timeoutMs}ms`;
+                logger.error('LLM', errorText);
+                throw new Error(errorText);
+            }
+            throw err;
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
         }
-
-        const data = await response.json() as any;
-        const content = data.message?.content ?? '';
-        const thinking = data.message?.thinking ?? null;
-
-        // Log thinking content (if present)
-        if (thinking) {
-            logger.info('LLM', `Thinking trace received (${thinking.length} chars)`);
-        }
-
-        // Log model response content
-        logger.info('LLM', `Response received (${content.length} chars)`);
-
-        // Log raw API response metadata
-        const meta = {
-            model: data.model,
-            total_duration: data.total_duration,
-            eval_count: data.eval_count,
-            eval_duration: data.eval_duration,
-            prompt_eval_count: data.prompt_eval_count,
-        };
-        logger.block('LLM', 'RESPONSE METADATA', JSON.stringify(meta, null, 2));
-
-        return { content, thinking, raw: data };
     }
 
     async structuredOutput<T>(messages: ChatMessage[], schema: ZodSchema<T>, options?: CompletionOptions): Promise<T> {
@@ -122,26 +139,46 @@ export class OllamaProvider implements LLMProvider {
     }
 
     async embed(text: string): Promise<number[]> {
-        const response = await fetch(`${this.baseUrl}/api/embeddings`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: this.embedModel,
-                prompt: text,
-            }),
-        });
+        const controller = new AbortController();
+        const timeoutId = this.timeoutMs ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
 
-        if (!response.ok) {
-            throw new Error(`Ollama embedding error: ${response.status} ${response.statusText}`);
+        try {
+            const response = await fetch(`${this.baseUrl}/api/embeddings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: this.embedModel,
+                    prompt: text,
+                }),
+                signal: controller.signal as RequestInit["signal"],
+            });
+
+            if (!response.ok) {
+                throw new Error(`Ollama embedding error: ${response.status} ${response.statusText}`);
+            }
+
+            const data = await response.json() as any;
+            return data.embedding;
+        } catch (err: any) {
+            if (err.name === 'AbortError') {
+                const errorText = `Ollama embedding timeout after ${this.timeoutMs}ms`;
+                logger.error('LLM', errorText);
+                throw new Error(errorText);
+            }
+            throw err;
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
         }
-
-        const data = await response.json() as any;
-        return data.embedding;
     }
 
     async healthCheck(): Promise<boolean> {
         try {
-            const res = await fetch(`${this.baseUrl}/api/tags`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            const res = await fetch(`${this.baseUrl}/api/tags`, {
+                signal: controller.signal as RequestInit["signal"],
+            });
+            clearTimeout(timeoutId);
             return res.ok;
         } catch {
             return false;

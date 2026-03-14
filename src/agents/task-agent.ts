@@ -258,9 +258,7 @@ async function runDirectLLMTask(task: Task, deps: TaskAgentDeps): Promise<string
             content: `TASK: ${task.input}${contextBlock}\n\nProvide your analysis as JSON: {"summary": "...your detailed analysis..."}`,
         },
     ];
-
-    logger.block('TaskAgent', `DIRECT LLM TASK "${task.id}" — PROMPT`, messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
-
+    logger.info('TaskAgent', `Executing task "${task.id}"`);
     try {
         const llmResponse = await deps.llm.complete(messages, { jsonMode: true, temperature: 0.3 });
 

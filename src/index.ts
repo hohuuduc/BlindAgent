@@ -21,6 +21,7 @@ import { generatePlan } from './agents/plan-agent';
 import { runTask, TaskAgentDeps } from './agents/task-agent';
 import { Task } from './core/types';
 import { logger, setLogLevel } from './utils/logger';
+import { Spinner } from './utils/spinner';
 
 // ─── ANSI Colors ────────────────────────────────────────────
 
@@ -66,7 +67,14 @@ function createRL(): readline.Interface {
 }
 
 function ask(rl: readline.Interface, question: string): Promise<string> {
-    return new Promise(resolve => rl.question(question, resolve));
+    return new Promise(resolve => {
+        const spinner = Spinner.activeSpinner;
+        spinner?.pause();
+        rl.question(question, (ans) => {
+            spinner?.resume();
+            resolve(ans);
+        });
+    });
 }
 
 function displayPlan(tasks: Task[]): void {
@@ -122,16 +130,24 @@ async function main(): Promise<void> {
     const llm = createLLMProvider(config);
 
     // Health check
+    const llmSpinner = new Spinner('Connecting to LLM provider...');
+    llmSpinner.start();
     const healthy = await llm.healthCheck();
     if (!healthy) {
+        llmSpinner.stop('Failed to connect to LLM', true);
         throw new Error(`Cannot connect to Ollama. Please ensure it is running at: ${config.ollama.baseUrl}`);
     }
+    llmSpinner.stop('LLM provider connected');
     logger.info('Main', 'LLM provider connected');
 
     // Probe embed model availability
     let semanticMemory: SemanticMemory | undefined;
+    const embedSpinner = new Spinner('Probing embed model availability...');
     try {
+        embedSpinner.start();
         await llm.embed('health check');
+        embedSpinner.stop('Embed model ready');
+
         const vectorDir = path.join(process.cwd(), 'data', 'vector_index');
         semanticMemory = new SemanticMemory(vectorDir, (text) => llm.embed(text));
         const initOk = await semanticMemory.init();
@@ -141,6 +157,7 @@ async function main(): Promise<void> {
             logger.info('Main', 'Semantic memory initialized (vector index ready)');
         }
     } catch (err: any) {
+        embedSpinner.stop('Failed to connect to embed model', true);
         logger.warn('Main', `Embed model unavailable, semantic memory disabled: ${err.message}`);
         semanticMemory = undefined;
     }
@@ -210,6 +227,9 @@ async function main(): Promise<void> {
 
             // Step 3: Execute tasks sequentially
             console.log('\nExecuting...\n');
+            const executionSpinner = new Spinner('Executing tasks...');
+            executionSpinner.start();
+
             const deps: TaskAgentDeps = {
                 llm,
                 skills,
@@ -228,12 +248,18 @@ async function main(): Promise<void> {
 
                 if (!depsMet) {
                     task.status = 'skipped';
+                    Spinner.activeSpinner?.pause();
                     console.log(`  [SKIPPED] ${task.id}: Skipped (dependency not met)`);
+                    Spinner.activeSpinner?.resume();
                     continue;
                 }
 
+                executionSpinner.update(`Executing task: ${task.title}`);
                 await runTask(task, deps);
+                
+                Spinner.activeSpinner?.pause();
                 displayTaskResult(task);
+                Spinner.activeSpinner?.resume();
 
                 // If task blocked, ask user
                 if (task.status === 'blocked') {
@@ -248,6 +274,8 @@ async function main(): Promise<void> {
                     }
                 }
             }
+
+            executionSpinner.stop('All tasks executed');
 
             // Summary
             console.log('\n────────────────────────────────────');

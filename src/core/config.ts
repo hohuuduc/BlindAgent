@@ -14,6 +14,7 @@ const DEFAULT_CONFIG: AppConfig = {
         baseUrl: 'http://localhost:11434',
         model: 'qwen2.5-coder:14b',
         embedModel: 'nomic-embed-text',
+        timeoutMs: 5000,
     },
     budgets: {
         systemPrompt: 300,

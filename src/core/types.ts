@@ -200,6 +200,8 @@ export interface OllamaConfig {
     baseUrl: string;
     model: string;
     embedModel: string;
+    /** Timeout in milliseconds for API requests */
+    timeoutMs?: number;
 }
 
 export interface BudgetConfig {

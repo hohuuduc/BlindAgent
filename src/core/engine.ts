@@ -11,6 +11,7 @@ import { CheckpointManager } from '../memory/checkpoint';
 import { ToolRegistry, ToolResult } from '../tools/registry';
 import { logger } from '../utils/logger';
 import * as readline from 'readline';
+import { Spinner } from '../utils/spinner';
 
 // ─── Node Summary (deterministic, no LLM call) ─────────────
 
@@ -230,7 +231,7 @@ async function executeLLMNode(
     const messages = renderPrompt(config, vars);
 
     // Log rendered prompt
-    logger.block('Engine', `LLM NODE "${node.id}" — RENDERED PROMPT`, messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+    logger.info('Engine', `Rendered prompt for: "${node.id}"`);
 
     const llmResponse = await ctx.llm.complete(messages, { jsonMode: true, temperature: 0.1 });
 
@@ -262,6 +263,8 @@ async function executeHumanInputNode(
     const promptText = node.promptUser ?? 'Please provide input:';
     const lastOutput = memory.get('lastOutput');
 
+    Spinner.activeSpinner?.pause();
+
     // Display context
     if (node.display === 'error' && lastOutput?.error) {
         console.log('\n--- Error ---');
@@ -283,6 +286,7 @@ async function executeHumanInputNode(
     return new Promise<{ action: string; content?: string }>((resolve) => {
         rl.question('> ', (answer) => {
             rl.close();
+            Spinner.activeSpinner?.resume();
             const trimmed = answer.trim();
             if (trimmed.toLowerCase() === 'skip') {
                 resolve({ action: 'skip' });
@@ -314,7 +318,7 @@ async function executeToolNode(
         };
 
         const messages = renderPrompt(config, vars);
-        logger.block('Engine', `TOOL NODE "${node.id}" — LLM PARAM GENERATION PROMPT`, messages.map(m => `[${m.role}]\n${m.content}`).join('\n---\n'));
+        logger.info('Engine', `Requesting LLM param generation prompt for "${node.id}"`)
 
         const llmResponse = await ctx.llm.complete(messages, { jsonMode: true, temperature: 0.1 });
 
@@ -326,7 +330,6 @@ async function executeToolNode(
             const { sanitizeLLMJson } = require('./json-sanitizer');
             const sanitized = sanitizeLLMJson(llmResponse.content);
             toolParams = JSON.parse(sanitized);
-            logger.block('Engine', `TOOL NODE "${node.id}" — LLM GENERATED PARAMS`, JSON.stringify(toolParams, null, 2));
         } catch {
             logger.warn('Engine', `Node "${node.id}" — LLM param response not parseable as JSON`);
             throw new Error(`Failed to parse LLM-generated parameters for tool "${node.tool}"`);
